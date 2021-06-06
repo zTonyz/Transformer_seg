@@ -1,7 +1,7 @@
 from torch.utils.data import Dataset
 import torch
 import numpy as np
-
+import os
 '''
 
 
@@ -30,6 +30,7 @@ def load_data_and_label(data_dir,label_dir,partition,index):
     for i in range(1,cnt+1):
         DATA_DIR=os.path.join(data_dir,str(start+i)+'.off.txt')
         LABEL_DIR=os.path.join(label_dir,str(i+start)+'.seg')
+
         data=np.loadtxt(DATA_DIR)
         label=np.loadtxt(LABEL_DIR)
         data_list.append(data)
@@ -37,15 +38,17 @@ def load_data_and_label(data_dir,label_dir,partition,index):
     return data_list,label_list
 
 class PsbDataset(Dataset):
-    def __init__(self,txt_path,partition='train',index):
-        self.data,self.label=load_data_and_label(data_dir,partition,index)
-        
+    def __init__(self,data_path,label_path,partition='train',index=0):
+        self.data,self.label=load_data_and_label(data_path,label_path,partition,index)
+        self.index=index
     
     def __len__(self):
         return len(self.data)
         
     def __getitem__(self,idx):
         data=self.data[idx]
+        data=torch.tensor(data,dtype=torch.float32)
         label=self.label[idx]
-        return data,label
+        index_in_all=idx+1+self.index*20
+        return index_in_all,data,label
         
