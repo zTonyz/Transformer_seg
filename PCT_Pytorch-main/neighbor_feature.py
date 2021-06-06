@@ -4,6 +4,8 @@ import numpy
 import os
 import torch
 
+dir='E:/matlab_code/neighbor_graph/'
+
 #index表示第几个面片(index=1,2,...)
 #neighbor_graph是一个邻接向量（3*N,）
 #每次输出该index的一个邻接面片序号
@@ -17,7 +19,7 @@ def near_face(index,neighbor_graph):
 #index 表明目前的data的编号(1,2,...
 #dir 邻接矩阵的目录
 #返回连接三个邻接面片特征的新data(B,N,4D)
-def cat_neighbor_features(data,index,dir):
+def cat_neighbor_features(data,index):
     neighbor_dir=os.path.join(dir,str(index)+'.mat')
     neighbor_v = scio.loadmat(neighbor_dir)['y'].reshape(-1)
     data=torch.squeeze(data,dim=0)
@@ -33,7 +35,7 @@ def cat_neighbor_features(data,index,dir):
             ng_feature=data[face_index-1]
             #print(now_face.shape)
             now_face=torch.cat([now_face,ori_face-ng_feature])
-        new_feature.append(now_face.numpy())
+        new_feature.append(now_face.detach().numpy())
     new_data=torch.Tensor(new_feature)
     return new_data
             

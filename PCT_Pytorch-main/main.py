@@ -5,8 +5,8 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.optim.lr_scheduler import CosineAnnealingLR
-from data import ModelNet40
-from model import Pct
+from dataset import PsbDataset
+from model import Pct_seg
 import numpy as np
 from torch.utils.data import DataLoader
 from util import cal_loss, IOStream
@@ -14,29 +14,16 @@ import sklearn.metrics as metrics
 
 import time 
 
-def _init_():
-    if not os.path.exists('checkpoints'):
-        os.makedirs('checkpoints')
-    if not os.path.exists('checkpoints/'+args.exp_name):
-        os.makedirs('checkpoints/'+args.exp_name)
-    if not os.path.exists('checkpoints/'+args.exp_name+'/'+'models'):
-        os.makedirs('checkpoints/'+args.exp_name+'/'+'models')
-    os.system('cp main.py checkpoints'+'/'+args.exp_name+'/'+'main.py.backup')
-    os.system('cp model.py checkpoints' + '/' + args.exp_name + '/' + 'model.py.backup')
-    os.system('cp util.py checkpoints' + '/' + args.exp_name + '/' + 'util.py.backup')
-    os.system('cp data.py checkpoints' + '/' + args.exp_name + '/' + 'data.py.backup')
 
-def train(args, io):
-    train_loader = DataLoader(ModelNet40(partition='train', num_points=args.num_points), num_workers=8,
-                            batch_size=args.batch_size, shuffle=True, drop_last=True)
-    test_loader = DataLoader(ModelNet40(partition='test', num_points=args.num_points), num_workers=8,
-                            batch_size=args.test_batch_size, shuffle=True, drop_last=False)
+def train(args):
+    train_loader = DataLoader(PsbDataset(partition='train',data_path=args.data_path,label_path=args.label_path,index=args.index),batch_size=1,num_workers=1)
+    test_loader = DataLoader(PsbDataset(partition='test',data_path=args.data_path,label_path=args.label_path,index=args.index),batch_size=1,num_workers=1)
 
     device = torch.device("cuda" if args.cuda else "cpu")
 
-    model = Pct(args).to(device)
-    print(str(model))
-    model = nn.DataParallel(model)
+    model = Pct_seg().to(device)
+    #print(str(model))
+    #model = nn.DataParallel(model)
 
     if args.use_sgd:
         print("Use SGD")
@@ -46,7 +33,7 @@ def train(args, io):
         opt = optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-4)
 
     scheduler = CosineAnnealingLR(opt, args.epochs, eta_min=args.lr)
-    
+
     criterion = cal_loss
     best_test_acc = 0
 
@@ -59,14 +46,16 @@ def train(args, io):
         train_true = []
         idx = 0
         total_time = 0.0
-        for data, label in (train_loader):
-            data, label = data.to(device), label.to(device).squeeze() 
-            data = data.permute(0, 2, 1)
-            batch_size = data.size()[0]
+        for idx,data, label in train_loader:
+            data, label = data.to(device), label.to(device)
+            # print(idx,type(idx)) tensor
+            # print(data.shape) (1,9408,628)
+            idx=idx.item() 
             opt.zero_grad()
 
-            start_time = time.time()
-            logits = model(data)
+            logits = model(data,idx)
+            print(logits.shape)
+        '''
             loss = criterion(logits, label)
             loss.backward()
             opt.step()
@@ -161,19 +150,16 @@ def test(args, io):
     avg_per_class_acc = metrics.balanced_accuracy_score(test_true, test_pred)
     outstr = 'Test :: test acc: %.6f, test avg acc: %.6f'%(test_acc, avg_per_class_acc)
     io.cprint(outstr)
+'''
 
 if __name__ == "__main__":
     # Training settings
     parser = argparse.ArgumentParser(description='Point Cloud Recognition')
     parser.add_argument('--exp_name', type=str, default='exp', metavar='N',
                         help='Name of the experiment')
-    parser.add_argument('--dataset', type=str, default='modelnet40', metavar='N',
-                        choices=['modelnet40'])
-    parser.add_argument('--batch_size', type=int, default=32, metavar='batch_size',
+    parser.add_argument('--batch_size', type=int, default=1, metavar='batch_size',
                         help='Size of batch)')
-    parser.add_argument('--test_batch_size', type=int, default=16, metavar='batch_size',
-                        help='Size of batch)')
-    parser.add_argument('--epochs', type=int, default=250, metavar='N',
+    parser.add_argument('--epochs', type=int, default=1, metavar='N',
                         help='number of episode to train ')
     parser.add_argument('--use_sgd', type=bool, default=True,
                         help='Use SGD')
@@ -181,35 +167,26 @@ if __name__ == "__main__":
                         help='learning rate (default: 0.001, 0.1 if using sgd)')
     parser.add_argument('--momentum', type=float, default=0.9, metavar='M',
                         help='SGD momentum (default: 0.9)')
-    parser.add_argument('--no_cuda', type=bool, default=False,
+    parser.add_argument('--cuda', type=bool, default=False,
                         help='enables CUDA training')
-    parser.add_argument('--seed', type=int, default=1, metavar='S',
-                        help='random seed (default: 1)')
     parser.add_argument('--eval', type=bool,  default=False,
                         help='evaluate the model')
-    parser.add_argument('--num_points', type=int, default=1024,
-                        help='num of points to use')
+    parser.add_argument('--label_path', type=str, default='E:/matlab_code/PSB_new/seg_consistent/',
+                        help='path of label')
+    parser.add_argument('--data_path', type=str, default='E:/0github/features/',
+                        help='path of dataset')
     parser.add_argument('--dropout', type=float, default=0.5,
                         help='dropout rate')
+    parser.add_argument('--index', type=int, default=0,
+                        help='which class to train')
     parser.add_argument('--model_path', type=str, default='', metavar='N',
                         help='Pretrained model path')
     args = parser.parse_args()
 
-    _init_()
-
-    io = IOStream('checkpoints/' + args.exp_name + '/run.log')
-    io.cprint(str(args))
-
-    args.cuda = not args.no_cuda and torch.cuda.is_available()
-    torch.manual_seed(args.seed)
-    if args.cuda:
-        io.cprint(
-            'Using GPU : ' + str(torch.cuda.current_device()) + ' from ' + str(torch.cuda.device_count()) + ' devices')
-        torch.cuda.manual_seed(args.seed)
-    else:
-        io.cprint('Using CPU')
 
     if not args.eval:
-        train(args, io)
+        train(args)
+    '''
     else:
         test(args, io)
+    '''

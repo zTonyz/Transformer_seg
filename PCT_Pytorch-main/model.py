@@ -1,152 +1,80 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from util import sample_and_group 
-
-class Local_op(nn.Module):
-    def __init__(self, in_channels, out_channels):
-        super(Local_op, self).__init__()
-        self.conv1 = nn.Conv1d(in_channels, out_channels, kernel_size=1, bias=False)
-        self.conv2 = nn.Conv1d(out_channels, out_channels, kernel_size=1, bias=False)
-        self.bn1 = nn.BatchNorm1d(out_channels)
-        self.bn2 = nn.BatchNorm1d(out_channels)
-
-    def forward(self, x):
-        b, n, s, d = x.size()  # torch.Size([32, 512, 32, 6]) 
-        x = x.permute(0, 1, 3, 2)   
-        x = x.reshape(-1, d, s) 
-        batch_size, _, N = x.size()
-        x = F.relu(self.bn1(self.conv1(x))) # B, D, N
-        x = F.relu(self.bn2(self.conv2(x))) # B, D, N
-        x = F.adaptive_max_pool1d(x, 1).view(batch_size, -1)
-        x = x.reshape(b, n, -1).permute(0, 2, 1)
-        return x
-
-class Pct(nn.Module):
-    def __init__(self, args, output_channels=40):
-        super(Pct, self).__init__()
-        self.args = args
-        self.conv1 = nn.Conv1d(3, 64, kernel_size=1, bias=False)
-        self.conv2 = nn.Conv1d(64, 64, kernel_size=1, bias=False)
-        self.bn1 = nn.BatchNorm1d(64)
-        self.bn2 = nn.BatchNorm1d(64)
-        self.gather_local_0 = Local_op(in_channels=128, out_channels=128)
-        self.gather_local_1 = Local_op(in_channels=256, out_channels=256)
-
-        self.pt_last = Point_Transformer_Last(args)
-
-        self.conv_fuse = nn.Sequential(nn.Conv1d(1280, 1024, kernel_size=1, bias=False),
-                                    nn.BatchNorm1d(1024),
-                                    nn.LeakyReLU(negative_slope=0.2))
+import neighbor_feature
 
 
-        self.linear1 = nn.Linear(1024, 512, bias=False)
-        self.bn6 = nn.BatchNorm1d(512)
-        self.dp1 = nn.Dropout(p=args.dropout)
-        self.linear2 = nn.Linear(512, 256)
-        self.bn7 = nn.BatchNorm1d(256)
-        self.dp2 = nn.Dropout(p=args.dropout)
-        self.linear3 = nn.Linear(256, output_channels)
 
-    def forward(self, x):
-#--------------------- Input Embedding --------------------
-# Neighbor Embedding: LBR --> LBR --> SG --> SG 
-        xyz = x.permute(0, 2, 1)
-        batch_size, _, _ = x.size()
-        # B, D, N
-        x = F.relu(self.bn1(self.conv1(x)))
-        # B, D, N
-        x = F.relu(self.bn2(self.conv2(x)))
-        x = x.permute(0, 2, 1)
-        new_xyz, new_feature = sample_and_group(npoint=512, radius=0.15, nsample=32, xyz=xyz, points=x)         
-        feature_0 = self.gather_local_0(new_feature)
-        feature = feature_0.permute(0, 2, 1)
-        new_xyz, new_feature = sample_and_group(npoint=256, radius=0.2, nsample=32, xyz=new_xyz, points=feature) 
-        feature_1 = self.gather_local_1(new_feature)
-
-#----------------- Self Attention -------------------------------------
-        x = self.pt_last(feature_1)          # 1024
-        x = torch.cat([x, feature_1], dim=1) # 1024+256=1280
-        x = self.conv_fuse(x)                # in:1280, out:1024
-
-# Point Feature --> Global Feature --> LBRD --> LBRD --> Linear --> Predict label 
-        x = F.adaptive_max_pool1d(x, 1).view(batch_size, -1)
-        x = F.leaky_relu(self.bn6(self.linear1(x)), negative_slope=0.2)
-        x = self.dp1(x)
-        x = F.leaky_relu(self.bn7(self.linear2(x)), negative_slope=0.2)
-        x = self.dp2(x)
-        x = self.linear3(x)
-
-        return x
-
-'''
--------------------------------分割-------------------------------------
-'''
 class Pct_seg(nn.Module):
-    def __init__(self, args, output_channels=40):
+    def __init__(self):
         super(Pct_seg, self).__init__()
-        self.args = args
-        self.conv1 = nn.Conv1d(3, 64, kernel_size=1, bias=False)
-        self.conv2 = nn.Conv1d(64, 64, kernel_size=1, bias=False)
-        self.bn1 = nn.BatchNorm1d(64)
-        self.bn2 = nn.BatchNorm1d(64)
-        self.gather_local_0 = Local_op(in_channels=128, out_channels=128)
-        self.gather_local_1 = Local_op(in_channels=256, out_channels=256)
 
-        self.pt_last = Point_Transformer_Last(args)
+        self.conv1 = nn.Conv1d(628, 512, kernel_size=1, bias=False)
+        self.conv2 = nn.Conv1d(512, 256, kernel_size=1, bias=False)
+        self.conv3 = nn.Conv1d(256,128 , kernel_size=1, bias=False)
+        self.conv4 = nn.Conv1d(512,256, kernel_size=1, bias=False)
+        self.bn1 = nn.BatchNorm1d(512)
+        self.bn2 = nn.BatchNorm1d(256)
+        self.bn3=nn.BatchNorm1d(128)
+        self.bn4 = nn.BatchNorm1d(256)
 
-        self.conv_fuse = nn.Sequential(nn.Conv1d(1280, 1024, kernel_size=1, bias=False),
-                                    nn.BatchNorm1d(1024),
-                                    nn.LeakyReLU(negative_slope=0.2))
+        self.pt_last = Point_Transformer_Last(channels=256)
+
+        self.conv_fuse = nn.Sequential(nn.Conv1d(512, 512, kernel_size=1, bias=False),
+                                        nn.BatchNorm1d(512),
+                                        nn.LeakyReLU(negative_slope=0.2),
+                                        nn.Conv1d(512, 256, kernel_size=1, bias=False),
+                                        nn.BatchNorm1d(256),
+                                       nn.LeakyReLU(negative_slope=0.2)
+
+                                       )
 
 
-        self.linear1 = nn.Linear(1024, 512, bias=False)
-        self.bn6 = nn.BatchNorm1d(512)
-        self.dp1 = nn.Dropout(p=args.dropout)
-        self.linear2 = nn.Linear(512, 256)
-        self.bn7 = nn.BatchNorm1d(256)
-        self.dp2 = nn.Dropout(p=args.dropout)
-        self.linear3 = nn.Linear(256, output_channels)
 
-    def forward(self, x):
+
+    def forward(self, x,index):
 #--------------------- Input Embedding --------------------
-# Neighbor Embedding: LBR --> LBR --> SG --> SG 
-        xyz = x.permute(0, 2, 1)
-        batch_size, _, _ = x.size()
-        # B, D, N
-        x = F.relu(self.bn1(self.conv1(x)))
-        # B, D, N
-        x = F.relu(self.bn2(self.conv2(x)))
+# Neighbor Embedding: LBR --> LBR --> LBR --> SG
+        #x:(B,N,628)
         x = x.permute(0, 2, 1)
-        
-        # 分割中SA层尽用作局部特征抽取，不需要下采样，设置npoint保持1024不变
-        new_xyz, new_feature = sample_and_group(npoint=1024, radius=0.15, nsample=32, xyz=xyz, points=x)         
-        feature_0 = self.gather_local_0(new_feature)
-        feature = feature_0.permute(0, 2, 1)
-        new_xyz, new_feature = sample_and_group(npoint=1024, radius=0.2, nsample=32, xyz=new_xyz, points=feature) 
-        feature_1 = self.gather_local_1(new_feature)
+        # x (B,628,N)
+        x = F.relu(self.bn1(self.conv1(x)))
 
+        x = F.relu(self.bn2(self.conv2(x)))
+        x = F.relu(self.bn3(self.conv3(x)))
+        x = x.permute(0, 2, 1)
+        # (B,N,128)
+        # 连接邻接特征
+        x=neighbor_feature.cat_neighbor_features(x,index)
+        x=torch.unsqueeze(x,dim=0)
+        #(1,n,128*4=512)
+        x = x.permute(0, 2, 1)
+        #(1,512,n)
+        x = F.relu(self.bn4(self.conv4(x)))
+        #(1,256,n)
+
+        self.before_transformer=x
 #----------------- Self Attention -------------------------------------
-        x = self.pt_last(feature_1)          # 1024
-        x = torch.cat([x, feature_1], dim=1) # 1024+256=1280
-        point_feature = self.conv_fuse(x)                # in:1280, out:1024
+
+
+        #(1,256,N)
+        #print(x.shape)
+        x = self.pt_last(x)
+
+        #x = x.permute(0, 2, 1)
+        #x=x+self.before_transformer
+        #(1,256, N)
+        x = torch.cat([x, self.before_transformer], dim=1) # 256+256=512
+        self.face_feature = self.conv_fuse(x)                # in:512, out:256
 
 # Point Feature --> Global Feature --> LBRD --> LBR --> Linear --> Predict label 
-        global_feature = F.adaptive_max_pool1d(x, 1).view(batch_size, -1)
 
-        x = torch.cat([point_feature, global_feature])
-
-        x = F.leaky_relu(self.bn6(self.linear1(x)), negative_slope=0.2)
-        x = self.dp1(x)
-        x = F.leaky_relu(self.bn7(self.linear2(x)), negative_slope=0.2)
-        x = self.linear3(x)
-
-        return x
+        return self.face_feature
 
 class Point_Transformer_Last(nn.Module):
-    def __init__(self, args, channels=256):
+    def __init__(self, channels=256):
         super(Point_Transformer_Last, self).__init__()
-        self.args = args
+
         self.conv1 = nn.Conv1d(channels, channels, kernel_size=1, bias=False)
         self.conv2 = nn.Conv1d(channels, channels, kernel_size=1, bias=False)
 
@@ -154,9 +82,9 @@ class Point_Transformer_Last(nn.Module):
         self.bn2 = nn.BatchNorm1d(channels)
 
         self.sa1 = SA_Layer(channels)
-        self.sa2 = SA_Layer(channels)
-        self.sa3 = SA_Layer(channels)
-        self.sa4 = SA_Layer(channels)
+        #self.sa2 = SA_Layer(channels)
+        #self.sa3 = SA_Layer(channels)
+        #self.sa4 = SA_Layer(channels)
 
     def forward(self, x):
         # 
@@ -170,12 +98,12 @@ class Point_Transformer_Last(nn.Module):
         x = F.relu(self.bn1(self.conv1(x)))
         x = F.relu(self.bn2(self.conv2(x)))
         x1 = self.sa1(x)
-        x2 = self.sa2(x1)
-        x3 = self.sa3(x2)
-        x4 = self.sa4(x3)
-        x = torch.cat((x1, x2, x3, x4), dim=1)
+        #x2 = self.sa2(x1)
+        #x3 = self.sa3(x2)
+        #x4 = self.sa4(x3)
+        #x = torch.cat([x1,x], dim=1)
 
-        return x
+        return x1
 
 # self attention layer
 class SA_Layer(nn.Module):
