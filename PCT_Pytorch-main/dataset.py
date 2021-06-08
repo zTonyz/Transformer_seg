@@ -3,9 +3,9 @@ import torch
 import numpy as np
 import os
 '''
+0.把一个类中所有的面片都集合在一起，每次从中取2000个面片作为一组
 
-
-1.每次输出一个模型的面片、label,输出形式是np.array
+1.每次输出一个的面片、label,输出形式是np.array
 面片形状(N,628),label形状(N,)
 
 2.如何区分不同的类别
@@ -40,15 +40,14 @@ def load_data_and_label(data_dir,label_dir,partition,index):
 class PsbDataset(Dataset):
     def __init__(self,data_path,label_path,partition='train',index=0):
         self.data,self.label=load_data_and_label(data_path,label_path,partition,index)
-        self.index=index
-    
+
+
     def __len__(self):
         return len(self.data)
-        
+
     def __getitem__(self,idx):
         data=self.data[idx]
         data=torch.tensor(data,dtype=torch.float32)
         label=self.label[idx]
-        index_in_all=idx+1+self.index*20
-        return index_in_all,data,label
-        
+        label = torch.tensor(label, dtype=torch.long)
+        return data,label
